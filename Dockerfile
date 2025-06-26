@@ -1,4 +1,4 @@
-# Railway-optimized Dockerfile
+# Simple Dockerfile for Railway
 FROM node:18-alpine
 
 WORKDIR /app
@@ -7,17 +7,16 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm install --production
 
 # Copy source code
 COPY . .
 
-# Environment variables
+# Environment
 ENV NODE_ENV=production
 
-# Railway automatically sets PORT, but we need to expose it
-EXPOSE 3000
+# Expose port
+EXPOSE $PORT
 
-# No health check (Railway handles this)
-# Start the application and bind to 0.0.0.0
-CMD ["node", "src/index.js"]
+# Start app
+CMD ["npm", "start"]

@@ -209,13 +209,13 @@ app.get('/', (c) => {
         <div class="card">
             <h2>📚 Quick Start</h2>
             <p>1. Download the local client:</p>
-            <div class="endpoint">curl -O ${c.req.url}client/local-client.js</div>
+            <div class="endpoint">curl -O ${new URL(c.req.url).origin}/client/local-client.js</div>
             
             <p>2. Run your local app (e.g., port 3000):</p>
             <div class="endpoint">npm start</div>
             
             <p>3. Connect to tunnel:</p>
-            <div class="endpoint">node local-client.js --port 3000 --server ${c.req.url}</div>
+            <div class="endpoint">node local-client.js --port 3000 --server ${new URL(c.req.url).origin}</div>
         </div>
     </div>
 
@@ -365,9 +365,14 @@ app.all('/t/:id/*', async (c) => {
       method: c.req.method,
       path: '/' + path,
       query: Object.fromEntries(new URL(c.req.url).searchParams.entries()),
-      headers: Object.fromEntries(c.req.header()),
+      headers: {},
       body: c.req.method !== 'GET' ? await c.req.text() : undefined
     }
+    
+    // Copy headers
+    c.req.header().forEach((value, key) => {
+      requestData.headers[key] = value
+    })
     
     // Send request through WebSocket and wait for response
     const response = await tunnelManager.sendRequest(tunnelId, requestData)
@@ -381,12 +386,14 @@ app.all('/t/:id/*', async (c) => {
     tunnel.lastActivity = new Date()
     
     // Return response
-    c.status(response.status || 200)
+    c.status(response.status as any)
     
     // Set response headers
     if (response.headers) {
       Object.entries(response.headers).forEach(([key, value]) => {
-        c.header(key, value as string)
+        if (typeof value === 'string') {
+          c.header(key, value)
+        }
       })
     }
     
@@ -399,9 +406,18 @@ app.all('/t/:id/*', async (c) => {
 })
 
 // Serve local client script
-app.get('/client/local-client.js', (c) => {
-  // Return the local client script (we'll create this file)
-  return c.text(`// Local client script will be served here`)
+app.get('/client/local-client.js', async (c) => {
+  try {
+    const fs = await import('fs')
+    const path = await import('path')
+    const clientPath = path.join(process.cwd(), 'client', 'local-client.js')
+    const clientScript = fs.readFileSync(clientPath, 'utf-8')
+    
+    c.header('Content-Type', 'application/javascript')
+    return c.text(clientScript)
+  } catch (error) {
+    return c.text('// Local client script not found', 404)
+  }
 })
 
 // 404 handler
@@ -426,7 +442,9 @@ const wss = new WebSocketServer({ server })
 setupWebSocket(wss, tunnelManager)
 
 // Handle HTTP requests with Hono
-server.on('request', serve(app).fetch)
+server.on('request', (req, res) => {
+  serve(app)(req, res)
+})
 
 server.listen(port, () => {
   console.log(`🚇 Hono Tunnelmole server running on port ${port}`)

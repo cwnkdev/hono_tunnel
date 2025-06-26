@@ -1,18 +1,155 @@
-// src/index.ts
+// src/index.js
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { serve } from '@hono/node-server'
 import { createServer } from 'http'
 import { WebSocketServer } from 'ws'
-import { TunnelManager } from './tunnel.js'
-import { setupWebSocket } from './websocket.js'
-import type { Tunnel, TunnelRequest, TunnelResponse } from './types.js'
+import { v4 as uuidv4 } from 'uuid'
+import fs from 'fs'
+import path from 'path'
 
-// Initialize Hono app
+// Tunnel Manager Class
+class TunnelManager {
+  constructor() {
+    this.tunnels = new Map()
+    this.connections = new Map()
+    this.pendingRequests = new Map()
+  }
+
+  generateId() {
+    return uuidv4().split('-')[0]
+  }
+
+  createTunnel(localPort, subdomain) {
+    const id = subdomain || this.generateId()
+    
+    if (this.tunnels.has(id)) {
+      throw new Error('Tunnel ID already exists')
+    }
+
+    const tunnel = {
+      id,
+      localPort,
+      createdAt: new Date(),
+      lastActivity: new Date(),
+      requestCount: 0,
+      connected: false
+    }
+
+    this.tunnels.set(id, tunnel)
+    console.log(`✅ Tunnel created: ${id} -> localhost:${localPort}`)
+    
+    return tunnel
+  }
+
+  getTunnel(id) {
+    return this.tunnels.get(id)
+  }
+
+  getAllTunnels() {
+    return Array.from(this.tunnels.values())
+  }
+
+  getActiveTunnelsCount() {
+    return Array.from(this.tunnels.values()).filter(t => t.connected).length
+  }
+
+  deleteTunnel(id) {
+    const tunnel = this.tunnels.get(id)
+    if (!tunnel) {
+      return false
+    }
+
+    const connection = this.connections.get(id)
+    if (connection) {
+      connection.close()
+      this.connections.delete(id)
+    }
+
+    this.tunnels.delete(id)
+    console.log(`🗑️  Tunnel deleted: ${id}`)
+    return true
+  }
+
+  connectWebSocket(tunnelId, ws) {
+    const tunnel = this.tunnels.get(tunnelId)
+    if (!tunnel) {
+      return false
+    }
+
+    const existingConnection = this.connections.get(tunnelId)
+    if (existingConnection) {
+      existingConnection.close()
+    }
+
+    this.connections.set(tunnelId, ws)
+    tunnel.connected = true
+    tunnel.lastActivity = new Date()
+
+    console.log(`🔌 WebSocket connected for tunnel: ${tunnelId}`)
+    return true
+  }
+
+  disconnectWebSocket(tunnelId) {
+    const tunnel = this.tunnels.get(tunnelId)
+    if (tunnel) {
+      tunnel.connected = false
+    }
+
+    this.connections.delete(tunnelId)
+    console.log(`🔌 WebSocket disconnected for tunnel: ${tunnelId}`)
+  }
+
+  async sendRequest(tunnelId, request) {
+    const connection = this.connections.get(tunnelId)
+    if (!connection) {
+      throw new Error('No active connection for tunnel')
+    }
+
+    return new Promise((resolve, reject) => {
+      const requestKey = `${tunnelId}-${request.id}`
+      
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(requestKey)
+        reject(new Error('Request timeout'))
+      }, 30000)
+
+      this.pendingRequests.set(requestKey, {
+        resolve,
+        reject,
+        timeout
+      })
+
+      const message = JSON.stringify({
+        type: 'http_request',
+        ...request
+      })
+
+      try {
+        connection.send(message)
+      } catch (error) {
+        clearTimeout(timeout)
+        this.pendingRequests.delete(requestKey)
+        reject(error)
+      }
+    })
+  }
+
+  handleResponse(tunnelId, response) {
+    const requestKey = `${tunnelId}-${response.requestId}`
+    const pending = this.pendingRequests.get(requestKey)
+    
+    if (pending) {
+      clearTimeout(pending.timeout)
+      pending.resolve(response)
+      this.pendingRequests.delete(requestKey)
+    }
+  }
+}
+
+// Initialize
 const app = new Hono()
-
-// Initialize tunnel manager
 const tunnelManager = new TunnelManager()
 
 // Middleware
@@ -52,22 +189,10 @@ app.get('/', (c) => {
             min-height: 100vh;
             padding: 20px;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-        }
-        .logo {
-            font-size: 3rem;
-            margin-bottom: 10px;
-        }
-        .subtitle {
-            font-size: 1.2rem;
-            opacity: 0.8;
-        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 40px; }
+        .logo { font-size: 3rem; margin-bottom: 10px; }
+        .subtitle { font-size: 1.2rem; opacity: 0.8; }
         .card {
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
@@ -88,14 +213,7 @@ app.get('/', (c) => {
             background: rgba(255, 255, 255, 0.1);
             border-radius: 10px;
         }
-        .stat-number {
-            font-size: 2rem;
-            font-weight: bold;
-            color: #4ade80;
-        }
-        .api-section {
-            margin-top: 30px;
-        }
+        .stat-number { font-size: 2rem; font-weight: bold; color: #4ade80; }
         .endpoint {
             background: rgba(0, 0, 0, 0.2);
             padding: 15px;
@@ -113,29 +231,6 @@ app.get('/', (c) => {
         .get { background: #10b981; }
         .post { background: #3b82f6; }
         .delete { background: #ef4444; }
-        .tunnels-list {
-            margin-top: 20px;
-        }
-        .tunnel-item {
-            background: rgba(0, 0, 0, 0.2);
-            padding: 15px;
-            border-radius: 8px;
-            margin: 10px 0;
-        }
-        .tunnel-url {
-            color: #60a5fa;
-            text-decoration: none;
-            font-weight: bold;
-        }
-        .tunnel-url:hover {
-            color: #93c5fd;
-        }
-        .status-connected {
-            color: #4ade80;
-        }
-        .status-disconnected {
-            color: #f87171;
-        }
         .refresh-btn {
             background: #4ade80;
             color: white;
@@ -145,9 +240,13 @@ app.get('/', (c) => {
             cursor: pointer;
             font-weight: bold;
         }
-        .refresh-btn:hover {
-            background: #22c55e;
+        .tunnel-item {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
         }
+        .tunnel-url { color: #60a5fa; text-decoration: none; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -163,10 +262,6 @@ app.get('/', (c) => {
                 <div>Active Tunnels</div>
             </div>
             <div class="stat">
-                <div class="stat-number" id="totalRequests">0</div>
-                <div>Total Requests</div>
-            </div>
-            <div class="stat">
                 <div class="stat-number" id="uptime">0</div>
                 <div>Uptime (seconds)</div>
             </div>
@@ -174,110 +269,62 @@ app.get('/', (c) => {
 
         <div class="card">
             <h2>🔗 API Endpoints</h2>
-            <div class="api-section">
-                <div class="endpoint">
-                    <span class="method post">POST</span>
-                    <strong>/api/tunnel/create</strong> - Create new tunnel
-                </div>
-                <div class="endpoint">
-                    <span class="method get">GET</span>
-                    <strong>/api/tunnel/:id</strong> - Get tunnel info
-                </div>
-                <div class="endpoint">
-                    <span class="method get">GET</span>
-                    <strong>/api/tunnels</strong> - List all tunnels
-                </div>
-                <div class="endpoint">
-                    <span class="method delete">DELETE</span>
-                    <strong>/api/tunnel/:id</strong> - Delete tunnel
-                </div>
-                <div class="endpoint">
-                    <span class="method get">GET</span>
-                    <strong>/t/:id/*</strong> - Proxy to local service
-                </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <strong>/api/tunnel/create</strong> - Create new tunnel
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <strong>/api/tunnels</strong> - List all tunnels
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <strong>/t/:id/*</strong> - Proxy to local service
             </div>
         </div>
 
         <div class="card">
             <h2>🌐 Active Tunnels</h2>
             <button class="refresh-btn" onclick="refreshData()">🔄 Refresh</button>
-            <div class="tunnels-list" id="tunnelsList">
-                <p>Loading tunnels...</p>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>📚 Quick Start</h2>
-            <p>1. Download the local client:</p>
-            <div class="endpoint">curl -O ${new URL(c.req.url).origin}/client/local-client.js</div>
-            
-            <p>2. Run your local app (e.g., port 3000):</p>
-            <div class="endpoint">npm start</div>
-            
-            <p>3. Connect to tunnel:</p>
-            <div class="endpoint">node local-client.js --port 3000 --server ${new URL(c.req.url).origin}</div>
+            <div id="tunnelsList">Loading...</div>
         </div>
     </div>
 
     <script>
         async function refreshData() {
             try {
-                // Get health stats
                 const healthRes = await fetch('/health');
                 const health = await healthRes.json();
-                
                 document.getElementById('activeTunnels').textContent = health.activeTunnels;
                 document.getElementById('uptime').textContent = Math.floor(health.uptime);
                 
-                // Get tunnels list
                 const tunnelsRes = await fetch('/api/tunnels');
                 const tunnelsData = await tunnelsRes.json();
                 
-                const tunnelsList = document.getElementById('tunnelsList');
+                const list = document.getElementById('tunnelsList');
                 if (tunnelsData.tunnels.length === 0) {
-                    tunnelsList.innerHTML = '<p>No active tunnels</p>';
+                    list.innerHTML = '<p>No active tunnels</p>';
                 } else {
-                    tunnelsList.innerHTML = tunnelsData.tunnels.map(tunnel => \`
+                    list.innerHTML = tunnelsData.tunnels.map(t => \`
                         <div class="tunnel-item">
-                            <div>
-                                <strong>ID:</strong> \${tunnel.id}
-                                <span class="\${tunnel.connected ? 'status-connected' : 'status-disconnected'}">
-                                    \${tunnel.connected ? '🟢 Connected' : '🔴 Disconnected'}
-                                </span>
-                            </div>
-                            <div>
-                                <strong>URL:</strong> 
-                                <a href="/t/\${tunnel.id}/" target="_blank" class="tunnel-url">
-                                    \${window.location.origin}/t/\${tunnel.id}/
-                                </a>
-                            </div>
-                            <div><strong>Local Port:</strong> \${tunnel.localPort}</div>
-                            <div><strong>Requests:</strong> \${tunnel.requestCount}</div>
-                            <div><strong>Created:</strong> \${new Date(tunnel.createdAt).toLocaleString()}</div>
+                            <strong>\${t.id}</strong> - Port \${t.localPort}
+                            <br><a href="/t/\${t.id}/" class="tunnel-url">/t/\${t.id}/</a>
                         </div>
                     \`).join('');
                 }
-                
             } catch (error) {
-                console.error('Failed to refresh data:', error);
+                console.error('Refresh failed:', error);
             }
         }
-        
-        // Auto-refresh every 5 seconds
         setInterval(refreshData, 5000);
-        
-        // Initial load
         refreshData();
     </script>
 </body>
-</html>
-  `
+</html>`
   return c.html(html)
 })
 
 // API Routes
-
-// Create tunnel
 app.post('/api/tunnel/create', async (c) => {
   try {
     const body = await c.req.json()
@@ -307,7 +354,11 @@ app.post('/api/tunnel/create', async (c) => {
   }
 })
 
-// Get tunnel info
+app.get('/api/tunnels', (c) => {
+  const tunnels = tunnelManager.getAllTunnels()
+  return c.json({ tunnels })
+})
+
 app.get('/api/tunnel/:id', (c) => {
   const id = c.req.param('id')
   const tunnel = tunnelManager.getTunnel(id)
@@ -319,13 +370,6 @@ app.get('/api/tunnel/:id', (c) => {
   return c.json(tunnel)
 })
 
-// List all tunnels
-app.get('/api/tunnels', (c) => {
-  const tunnels = tunnelManager.getAllTunnels()
-  return c.json({ tunnels })
-})
-
-// Delete tunnel
 app.delete('/api/tunnel/:id', (c) => {
   const id = c.req.param('id')
   const success = tunnelManager.deleteTunnel(id)
@@ -337,7 +381,7 @@ app.delete('/api/tunnel/:id', (c) => {
   return c.json({ success: true, message: 'Tunnel deleted' })
 })
 
-// Proxy requests to local machine
+// Proxy requests
 app.all('/t/:id/*', async (c) => {
   const tunnelId = c.req.param('id')
   const path = c.req.param('*') || ''
@@ -350,54 +394,48 @@ app.all('/t/:id/*', async (c) => {
   if (!tunnel.connected) {
     return c.json({ 
       error: 'Tunnel not connected',
-      hint: 'Make sure your local client is running and connected',
-      tunnelId 
+      hint: 'Make sure your local client is running'
     }, 503)
   }
   
   try {
-    // Create request ID for tracking
     const requestId = tunnelManager.generateId()
+    const url = new URL(c.req.url)
     
-    // Prepare request data
-    const requestData: TunnelRequest = {
+    const requestData = {
       id: requestId,
       method: c.req.method,
       path: '/' + path,
-      query: Object.fromEntries(new URL(c.req.url).searchParams.entries()),
+      query: Object.fromEntries(url.searchParams.entries()),
       headers: {},
       body: c.req.method !== 'GET' ? await c.req.text() : undefined
     }
     
     // Copy headers
-    c.req.header().forEach((value, key) => {
+    for (const [key, value] of Object.entries(c.req.header())) {
       requestData.headers[key] = value
-    })
+    }
     
-    // Send request through WebSocket and wait for response
     const response = await tunnelManager.sendRequest(tunnelId, requestData)
     
     if (!response) {
       return c.json({ error: 'Request timeout' }, 504)
     }
     
-    // Update tunnel stats
     tunnel.requestCount++
     tunnel.lastActivity = new Date()
     
-    // Return response
-    c.status(response.status as any)
-    
-    // Set response headers
+    // Set response
     if (response.headers) {
       Object.entries(response.headers).forEach(([key, value]) => {
-        if (typeof value === 'string') {
-          c.header(key, value)
-        }
+        c.header(key, String(value))
       })
     }
     
-    return c.body(response.body || '')
+    return new Response(response.body || '', {
+      status: response.status || 200,
+      headers: response.headers || {}
+    })
     
   } catch (error) {
     console.error('Proxy error:', error)
@@ -405,14 +443,11 @@ app.all('/t/:id/*', async (c) => {
   }
 })
 
-// Serve local client script
+// Serve client script
 app.get('/client/local-client.js', async (c) => {
   try {
-    const fs = await import('fs')
-    const path = await import('path')
     const clientPath = path.join(process.cwd(), 'client', 'local-client.js')
     const clientScript = fs.readFileSync(clientPath, 'utf-8')
-    
     c.header('Content-Type', 'application/javascript')
     return c.text(clientScript)
   } catch (error) {
@@ -420,28 +455,72 @@ app.get('/client/local-client.js', async (c) => {
   }
 })
 
-// 404 handler
-app.notFound((c) => {
-  return c.json({ error: 'Not found' }, 404)
-})
-
-// Error handler
-app.onError((err, c) => {
-  console.error('Server error:', err)
-  return c.json({ error: 'Internal server error' }, 500)
-})
+// Setup WebSocket
+function setupWebSocket(wss, tunnelManager) {
+  wss.on('connection', (ws, req) => {
+    const url = new URL(req.url || '', `http://${req.headers.host}`)
+    const pathParts = url.pathname.split('/')
+    
+    if (pathParts.length !== 3 || pathParts[1] !== 'ws') {
+      ws.close(1002, 'Invalid WebSocket path')
+      return
+    }
+    
+    const tunnelId = pathParts[2]
+    const tunnel = tunnelManager.getTunnel(tunnelId)
+    
+    if (!tunnel) {
+      ws.close(1002, 'Tunnel not found')
+      return
+    }
+    
+    const connected = tunnelManager.connectWebSocket(tunnelId, ws)
+    if (!connected) {
+      ws.close(1002, 'Failed to connect tunnel')
+      return
+    }
+    
+    ws.send(JSON.stringify({
+      type: 'connected',
+      tunnelId,
+      message: 'Successfully connected to tunnel'
+    }))
+    
+    ws.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString())
+        
+        if (message.type === 'http_response') {
+          tunnelManager.handleResponse(tunnelId, {
+            requestId: message.requestId,
+            status: message.status,
+            headers: message.headers,
+            body: message.body
+          })
+        }
+      } catch (error) {
+        console.error('WebSocket message error:', error)
+      }
+    })
+    
+    ws.on('close', () => {
+      tunnelManager.disconnectWebSocket(tunnelId)
+    })
+    
+    ws.on('error', (error) => {
+      console.error(`WebSocket error for tunnel ${tunnelId}:`, error)
+      tunnelManager.disconnectWebSocket(tunnelId)
+    })
+  })
+}
 
 // Start server
 const port = parseInt(process.env.PORT || '3000')
-
-// Create HTTP server for WebSocket upgrade
 const server = createServer()
 
-// Setup WebSocket server
 const wss = new WebSocketServer({ server })
 setupWebSocket(wss, tunnelManager)
 
-// Handle HTTP requests with Hono
 server.on('request', (req, res) => {
   serve(app)(req, res)
 })
@@ -449,7 +528,6 @@ server.on('request', (req, res) => {
 server.listen(port, () => {
   console.log(`🚇 Hono Tunnelmole server running on port ${port}`)
   console.log(`📊 Dashboard: http://localhost:${port}`)
-  console.log(`🔗 API: http://localhost:${port}/api`)
 })
 
 export default app

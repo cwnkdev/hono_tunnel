@@ -99,8 +99,34 @@ function handleWebSocketMessage(
       tunnelManager.handleResponse(tunnelId, response)
       break
       
-    case 'ping':
+          case 'ping':
       // Handle ping from client
       const tunnel = tunnelManager.getTunnel(tunnelId)
       if (tunnel) {
         tunnel.lastActivity = new Date()
+        // Send pong back
+        const connection = tunnelManager.getConnection(tunnelId)
+        if (connection) {
+          connection.send(JSON.stringify({
+            type: 'pong',
+            timestamp: Date.now()
+          }))
+        }
+      }
+      break
+      
+    case 'status':
+      // Handle status update from client
+      console.log(`📊 Status update from tunnel ${tunnelId}:`, message.data)
+      break
+      
+    case 'error':
+      // Handle error from client
+      console.error(`❌ Error from tunnel ${tunnelId}:`, message.error)
+      break
+      
+    default:
+      console.warn(`⚠️  Unknown message type from tunnel ${tunnelId}:`, message.type)
+      break
+  }
+}

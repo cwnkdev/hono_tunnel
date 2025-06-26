@@ -2,14 +2,12 @@
   "name": "hono-tunnelmole-railway",
   "version": "1.0.0",
   "description": "Tunnelmole service built with Hono for Railway deployment",
-  "main": "dist/index.js",
+  "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "postbuild": "echo 'Build completed successfully'",
-    "test": "echo 'No tests specified'",
+    "dev": "node src/index.js",
+    "start": "node src/index.js",
+    "build": "echo 'No build step needed for JavaScript'",
     "railway:deploy": "railway deploy",
     "client": "node client/local-client.js"
   },
@@ -18,13 +16,6 @@
     "@hono/node-server": "^1.8.0",
     "ws": "^8.16.0",
     "uuid": "^9.0.1"
-  },
-  "devDependencies": {
-    "@types/node": "^20.11.0",
-    "@types/ws": "^8.5.10",
-    "@types/uuid": "^9.0.7",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0"
   },
   "engines": {
     "node": ">=18.0.0",

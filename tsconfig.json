@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2020",
     "module": "ESNext",
     "moduleResolution": "node",
     "allowSyntheticDefaultImports": true,
@@ -8,18 +8,12 @@
     "allowJs": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "strict": true,
-    "declaration": true,
+    "strict": false,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": false,
-    "jsx": "preserve",
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
+    "noEmit": false
   },
   "include": [
     "src/**/*"
@@ -28,8 +22,5 @@
     "node_modules",
     "dist",
     "client"
-  ],
-  "ts-node": {
-    "esm": true
-  }
+  ]
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// client/local-client.js
+// tunnel-client.js - Standalone Tunnelmole Client
+// Usage: node tunnel-client.js --server=https://your-app.railway.app --port=3000
 
 const WebSocket = require('ws');
 const http = require('http');
@@ -21,9 +22,12 @@ class TunnelClient {
 
   async start() {
     try {
-      console.log('🚇 Starting Hono Tunnelmole Client...');
+      console.log('🚇 Starting Tunnelmole Client...');
       console.log(`📡 Server: ${this.serverUrl}`);
       console.log(`🏠 Local Port: ${this.localPort}`);
+      
+      // Test server connectivity first
+      await this.testServer();
       
       // Create tunnel
       await this.createTunnel();
@@ -36,9 +40,23 @@ class TunnelClient {
       console.log(`🔗 Tunnel ID: ${this.tunnelId}`);
       console.log('🎯 Press Ctrl+C to stop');
       
+      // Start ping interval
+      this.startPingInterval();
+      
     } catch (error) {
       console.error('❌ Failed to start tunnel:', error.message);
       process.exit(1);
+    }
+  }
+
+  async testServer() {
+    try {
+      console.log('🔍 Testing server connectivity...');
+      const response = await this.httpRequest('GET', `${this.serverUrl}/health`);
+      const health = JSON.parse(response);
+      console.log(`✅ Server is healthy (uptime: ${Math.floor(health.uptime || 0)}s)`);
+    } catch (error) {
+      throw new Error(`Server not reachable: ${error.message}`);
     }
   }
 
@@ -50,6 +68,7 @@ class TunnelClient {
     };
 
     try {
+      console.log('🔧 Creating tunnel...');
       const response = await this.httpRequest('POST', url, payload);
       const data = JSON.parse(response);
       
@@ -61,6 +80,8 @@ class TunnelClient {
       this.publicUrl = data.tunnel.publicUrl;
       this.wsUrl = data.tunnel.wsUrl;
       
+      console.log(`📝 Tunnel created with ID: ${this.tunnelId}`);
+      
     } catch (error) {
       throw new Error(`Failed to create tunnel: ${error.message}`);
     }
@@ -68,7 +89,7 @@ class TunnelClient {
 
   async connectWebSocket() {
     return new Promise((resolve, reject) => {
-      console.log(`🔌 Connecting to WebSocket: ${this.wsUrl}`);
+      console.log(`🔌 Connecting to WebSocket...`);
       
       this.ws = new WebSocket(this.wsUrl);
       
@@ -97,7 +118,7 @@ class TunnelClient {
         if (this.ws.readyState !== WebSocket.OPEN) {
           reject(new Error('WebSocket connection timeout'));
         }
-      }, 10000);
+      }, 15000);
     });
   }
 
@@ -107,7 +128,7 @@ class TunnelClient {
       
       switch (message.type) {
         case 'connected':
-          console.log('✅ Connected to tunnel:', message.tunnelId);
+          console.log('✅ Connected to tunnel server');
           break;
           
         case 'http_request':
@@ -115,7 +136,7 @@ class TunnelClient {
           break;
           
         case 'pong':
-          // Handle pong response
+          // Handle pong response silently
           break;
           
         case 'error':
@@ -135,6 +156,13 @@ class TunnelClient {
     try {
       console.log(`📨 ${request.method} ${request.path}`);
       
+      // Test if local server is reachable
+      const isLocalServerUp = await this.testLocalServer();
+      if (!isLocalServerUp) {
+        this.sendErrorResponse(request.id, 503, 'Local server not running');
+        return;
+      }
+      
       // Forward request to local server
       const response = await this.forwardToLocal(request);
       
@@ -149,19 +177,46 @@ class TunnelClient {
       
     } catch (error) {
       console.error('❌ Failed to handle request:', error.message);
-      
-      // Send error response
+      this.sendErrorResponse(request.id, 500, error.message);
+    }
+  }
+
+  sendErrorResponse(requestId, status, message) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
         type: 'http_response',
-        requestId: request.id,
-        status: 500,
+        requestId: requestId,
+        status: status,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          error: 'Internal server error',
-          message: error.message 
+          error: message,
+          tunnel: this.tunnelId,
+          localPort: this.localPort
         })
       }));
     }
+  }
+
+  async testLocalServer() {
+    return new Promise((resolve) => {
+      const req = http.request({
+        hostname: 'localhost',
+        port: this.localPort,
+        path: '/',
+        method: 'HEAD',
+        timeout: 1000
+      }, (res) => {
+        resolve(true);
+      });
+
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => {
+        req.destroy();
+        resolve(false);
+      });
+      
+      req.end();
+    });
   }
 
   async forwardToLocal(request) {
@@ -236,12 +291,13 @@ class TunnelClient {
       const options = {
         hostname: urlObj.hostname,
         port: urlObj.port || (isHttps ? 443 : 80),
-        path: urlObj.pathname,
+        path: urlObj.pathname + urlObj.search,
         method: method,
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': 'TunnelClient/1.0'
-        }
+        },
+        timeout: 15000
       };
 
       if (data) {
@@ -269,6 +325,11 @@ class TunnelClient {
         reject(error);
       });
 
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+
       if (data) {
         req.write(JSON.stringify(data));
       }
@@ -290,6 +351,7 @@ class TunnelClient {
       try {
         await this.connectWebSocket();
         console.log('✅ Reconnected successfully');
+        this.startPingInterval();
       } catch (error) {
         console.error('❌ Reconnection failed:', error.message);
       }
@@ -330,30 +392,29 @@ class TunnelClient {
 function parseArgs() {
   const args = process.argv.slice(2);
   const options = {
-    serverUrl: 'https://your-app.railway.app',
+    serverUrl: 'https://honotunnel-production.up.railway.app', // Default to your Railway URL
     localPort: 3000,
     subdomain: null
   };
 
   for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
-      case '--port':
-      case '-p':
-        options.localPort = parseInt(args[++i]);
-        break;
-      case '--server':
-      case '-s':
-        options.serverUrl = args[++i];
-        break;
-      case '--subdomain':
-      case '-d':
-        options.subdomain = args[++i];
-        break;
-      case '--help':
-      case '-h':
-        showHelp();
-        process.exit(0);
-        break;
+    const arg = args[i];
+    
+    if (arg.startsWith('--server=')) {
+      options.serverUrl = arg.split('=')[1];
+    } else if (arg.startsWith('--port=')) {
+      options.localPort = parseInt(arg.split('=')[1]);
+    } else if (arg.startsWith('--subdomain=')) {
+      options.subdomain = arg.split('=')[1];
+    } else if (arg === '--port' || arg === '-p') {
+      options.localPort = parseInt(args[++i]);
+    } else if (arg === '--server' || arg === '-s') {
+      options.serverUrl = args[++i];
+    } else if (arg === '--subdomain' || arg === '-d') {
+      options.subdomain = args[++i];
+    } else if (arg === '--help' || arg === '-h') {
+      showHelp();
+      process.exit(0);
     }
   }
 
@@ -362,24 +423,30 @@ function parseArgs() {
 
 function showHelp() {
   console.log(`
-🚇 Hono Tunnelmole Local Client
+🚇 Tunnelmole Client for Railway
 
-Usage: node local-client.js [options]
+Usage: node tunnel-client.js [options]
 
 Options:
+  -s, --server <url>       Tunnel server URL
   -p, --port <number>      Local port to forward (default: 3000)
-  -s, --server <url>       Tunnel server URL (default: https://your-app.railway.app)
   -d, --subdomain <name>   Custom subdomain (optional)
   -h, --help              Show this help message
 
 Examples:
-  node local-client.js --port 8080
-  node local-client.js --port 3000 --server https://my-tunnel.railway.app
-  node local-client.js --port 8080 --subdomain myapp
+  node tunnel-client.js --port 8080
+  node tunnel-client.js --server https://my-tunnel.railway.app --port 3000
+  node tunnel-client.js --port 8080 --subdomain myapp
+  node tunnel-client.js -p 5000 -s https://my-tunnel.railway.app
 
 Environment Variables:
   TUNNEL_SERVER   Default server URL
   TUNNEL_PORT     Default local port
+
+Quick Start:
+  1. Start your local app:     npm start
+  2. Run tunnel client:        node tunnel-client.js --port 3000
+  3. Access via public URL:    https://your-server.railway.app/t/abc123/
 `);
 }
 
@@ -393,6 +460,17 @@ async function main() {
   }
   if (process.env.TUNNEL_PORT) {
     options.localPort = parseInt(process.env.TUNNEL_PORT);
+  }
+
+  // Validate options
+  if (!options.serverUrl) {
+    console.error('❌ Server URL is required');
+    process.exit(1);
+  }
+  
+  if (!options.localPort || options.localPort < 1 || options.localPort > 65535) {
+    console.error('❌ Valid port number is required (1-65535)');
+    process.exit(1);
   }
 
   const client = new TunnelClient(options);
@@ -411,7 +489,6 @@ async function main() {
 
   // Start the client
   await client.start();
-  client.startPingInterval();
 }
 
 // Run if this file is executed directly

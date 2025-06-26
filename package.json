@@ -5,11 +5,10 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "dev": "node src/index.js",
     "start": "node src/index.js",
-    "build": "echo 'No build step needed for JavaScript'",
-    "railway:deploy": "railway deploy",
-    "client": "node client/local-client.js"
+    "dev": "node src/index.js",
+    "build": "echo 'No build needed'",
+    "test": "echo 'No tests'"
   },
   "dependencies": {
     "hono": "^4.0.0",
@@ -18,17 +17,9 @@
     "uuid": "^9.0.1"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=8.0.0"
+    "node": ">=18.0.0"
   },
-  "keywords": [
-    "hono",
-    "tunnelmole",
-    "ngrok",
-    "railway",
-    "tunnel",
-    "websocket"
-  ],
+  "keywords": ["hono", "tunnelmole", "railway"],
   "author": "Your Name",
   "license": "MIT"
 }

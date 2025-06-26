@@ -1,4 +1,4 @@
-# Simple Dockerfile without TypeScript build
+# Railway-optimized Dockerfile
 FROM node:18-alpine
 
 WORKDIR /app
@@ -9,18 +9,15 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
-# Copy all source files
+# Copy source code
 COPY . .
 
 # Environment variables
 ENV NODE_ENV=production
 
-# Expose port
-EXPOSE $PORT
+# Railway automatically sets PORT, but we need to expose it
+EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:$PORT/health || exit 1
-
-# Start with tsx (no build needed)
-CMD ["npx", "tsx", "src/index.ts"]
+# No health check (Railway handles this)
+# Start the application and bind to 0.0.0.0
+CMD ["node", "src/index.js"]

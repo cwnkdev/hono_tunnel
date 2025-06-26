@@ -1,6 +1,8 @@
-// src/index.js - เพิ่ม API endpoints ที่ขาดหาย
+// src/index.js - Real HTTP Proxy Implementation
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
+import { createServer } from 'http'
+import { WebSocketServer } from 'ws'
 import { v4 as uuidv4 } from 'uuid'
 
 const app = new Hono()
@@ -8,6 +10,7 @@ const app = new Hono()
 // In-memory storage
 const tunnels = new Map()
 const connections = new Map()
+const pendingRequests = new Map()
 
 // Helper functions
 function generateId() {
@@ -21,7 +24,8 @@ app.get('/health', (c) => {
     timestamp: new Date().toISOString(),
     port: process.env.PORT || '3000',
     host: '0.0.0.0',
-    activeTunnels: tunnels.size
+    activeTunnels: tunnels.size,
+    activeConnections: connections.size
   })
 })
 
@@ -37,32 +41,24 @@ app.get('/', (c) => {
         .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; }
         .logo { font-size: 2rem; text-align: center; margin-bottom: 20px; }
         .status { background: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .endpoints { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; }
         .endpoint { font-family: monospace; background: #e9ecef; padding: 8px; margin: 5px 0; border-radius: 3px; }
-        .tunnels { margin: 20px 0; }
         .tunnel { background: #fff3cd; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { color: #28a745; }
+        .warning { color: #ffc107; }
+        .error { color: #dc3545; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="logo">🚇 Hono Tunnelmole</div>
+        <div class="logo">🚇 Hono Tunnelmole Pro</div>
         
         <div class="status">
-            <h3>✅ Server Status: Online</h3>
-            <p>Server is running and ready to accept tunnels</p>
-            <p>Active Tunnels: <span id="tunnelCount">${tunnels.size}</span></p>
+            <h3>✅ Server Status: Online with Real Proxying</h3>
+            <p>Active Tunnels: <span class="success">${tunnels.size}</span></p>
+            <p>WebSocket Connections: <span class="success">${connections.size}</span></p>
         </div>
 
-        <div class="endpoints">
-            <h3>🔗 API Endpoints</h3>
-            <div class="endpoint">POST /api/tunnel/create - Create new tunnel</div>
-            <div class="endpoint">GET /api/tunnels - List all tunnels</div>
-            <div class="endpoint">GET /api/tunnel/:id - Get tunnel info</div>
-            <div class="endpoint">DELETE /api/tunnel/:id - Delete tunnel</div>
-            <div class="endpoint">GET /t/:id/* - Proxy to local service</div>
-        </div>
-
-        <div class="tunnels">
+        <div class="status">
             <h3>🌐 Active Tunnels</h3>
             <div id="tunnelsList">
                 ${Array.from(tunnels.values()).map(tunnel => `
@@ -70,35 +66,31 @@ app.get('/', (c) => {
                         <strong>ID:</strong> ${tunnel.id}<br>
                         <strong>Port:</strong> ${tunnel.localPort}<br>
                         <strong>URL:</strong> <a href="/t/${tunnel.id}/" target="_blank">/t/${tunnel.id}/</a><br>
+                        <strong>Status:</strong> <span class="${tunnel.connected ? 'success' : 'error'}">${tunnel.connected ? 'Connected' : 'Disconnected'}</span><br>
+                        <strong>Requests:</strong> ${tunnel.requestCount}<br>
                         <strong>Created:</strong> ${tunnel.createdAt.toLocaleString()}
                     </div>
                 `).join('') || '<p>No active tunnels</p>'}
             </div>
         </div>
 
-        <div class="endpoints">
-            <h3>📚 How to Use</h3>
-            <p>1. Install client dependencies:</p>
-            <div class="endpoint">npm install ws</div>
-            
-            <p>2. Run your local app:</p>
-            <div class="endpoint">npm start  # or python -m http.server 3000</div>
-            
-            <p>3. Create a tunnel:</p>
+        <div class="status">
+            <h3>📚 How to Connect</h3>
+            <p>1. Create tunnel:</p>
             <div class="endpoint">curl -X POST ${new URL(c.req.url).origin}/api/tunnel/create -H "Content-Type: application/json" -d '{"localPort": 3000}'</div>
             
-            <p>4. Access via public URL:</p>
+            <p>2. Connect WebSocket client (use the provided wsUrl)</p>
+            
+            <p>3. Access via public URL:</p>
             <div class="endpoint">${new URL(c.req.url).origin}/t/TUNNEL_ID/</div>
         </div>
     </div>
 
     <script>
-        // Auto-refresh tunnel count
         setInterval(async () => {
             try {
                 const response = await fetch('/api/tunnels');
                 const data = await response.json();
-                document.getElementById('tunnelCount').textContent = data.tunnels.length;
                 
                 const list = document.getElementById('tunnelsList');
                 if (data.tunnels.length === 0) {
@@ -109,6 +101,8 @@ app.get('/', (c) => {
                             <strong>ID:</strong> \${tunnel.id}<br>
                             <strong>Port:</strong> \${tunnel.localPort}<br>
                             <strong>URL:</strong> <a href="/t/\${tunnel.id}/" target="_blank">/t/\${tunnel.id}/</a><br>
+                            <strong>Status:</strong> <span class="\${tunnel.connected ? 'success' : 'error'}">\${tunnel.connected ? 'Connected' : 'Disconnected'}</span><br>
+                            <strong>Requests:</strong> \${tunnel.requestCount}<br>
                             <strong>Created:</strong> \${new Date(tunnel.createdAt).toLocaleString()}
                         </div>
                     \`).join('');
@@ -116,7 +110,7 @@ app.get('/', (c) => {
             } catch (error) {
                 console.error('Failed to refresh:', error);
             }
-        }, 5000);
+        }, 3000);
     </script>
 </body>
 </html>`
@@ -124,7 +118,7 @@ app.get('/', (c) => {
   return c.html(html)
 })
 
-// ✅ CREATE TUNNEL API
+// CREATE TUNNEL API
 app.post('/api/tunnel/create', async (c) => {
   try {
     const body = await c.req.json()
@@ -173,13 +167,13 @@ app.post('/api/tunnel/create', async (c) => {
   }
 })
 
-// ✅ LIST TUNNELS API
+// LIST TUNNELS API
 app.get('/api/tunnels', (c) => {
   const tunnelList = Array.from(tunnels.values())
   return c.json({ tunnels: tunnelList })
 })
 
-// ✅ GET TUNNEL INFO API
+// GET TUNNEL INFO API
 app.get('/api/tunnel/:id', (c) => {
   const id = c.req.param('id')
   const tunnel = tunnels.get(id)
@@ -191,11 +185,16 @@ app.get('/api/tunnel/:id', (c) => {
   return c.json(tunnel)
 })
 
-// ✅ DELETE TUNNEL API
+// DELETE TUNNEL API
 app.delete('/api/tunnel/:id', (c) => {
   const id = c.req.param('id')
   
   if (tunnels.has(id)) {
+    const connection = connections.get(id)
+    if (connection) {
+      connection.close()
+    }
+    
     tunnels.delete(id)
     connections.delete(id)
     console.log(`🗑️ Tunnel deleted: ${id}`)
@@ -205,7 +204,7 @@ app.delete('/api/tunnel/:id', (c) => {
   }
 })
 
-// ✅ PROXY REQUESTS
+// REAL PROXY REQUESTS - แก้ไขใหม่เพื่อทำ real proxying
 app.all('/t/:id/*', async (c) => {
   const tunnelId = c.req.param('id')
   const path = c.req.param('*') || ''
@@ -215,47 +214,163 @@ app.all('/t/:id/*', async (c) => {
     return c.json({ error: 'Tunnel not found' }, 404)
   }
   
-  // For now, return a simple response (WebSocket implementation would go here)
-  tunnel.requestCount++
-  tunnel.lastActivity = new Date()
+  if (!tunnel.connected) {
+    return c.html(`
+      <html>
+        <head><title>Tunnel Not Connected</title></head>
+        <body style="font-family: Arial; text-align: center; margin-top: 100px;">
+          <h1>🔌 Tunnel Not Connected</h1>
+          <p>Tunnel ID: <code>${tunnelId}</code></p>
+          <p>The local client is not connected to this tunnel.</p>
+          <p>Please start your local client with:</p>
+          <code style="background: #f5f5f5; padding: 10px; display: block; margin: 20px;">
+            node fixed-client.js --port ${tunnel.localPort}
+          </code>
+          <a href="/" style="color: #007bff;">← Back to Dashboard</a>
+        </body>
+      </html>
+    `, 503)
+  }
   
-  return c.json({
-    message: 'Tunnel proxy endpoint',
-    tunnelId,
-    path: '/' + path,
-    info: 'WebSocket implementation needed for actual proxying',
-    localPort: tunnel.localPort,
-    requestCount: tunnel.requestCount
-  })
+  try {
+    // Create request ID for tracking
+    const requestId = generateId()
+    
+    // Get full URL and query parameters
+    const url = new URL(c.req.url)
+    const fullPath = '/' + path + url.search
+    
+    // Prepare request data
+    const requestData = {
+      id: requestId,
+      method: c.req.method,
+      path: fullPath,
+      query: Object.fromEntries(url.searchParams.entries()),
+      headers: {},
+      body: c.req.method !== 'GET' && c.req.method !== 'HEAD' ? await c.req.text() : undefined
+    }
+    
+    // Copy important headers
+    const headers = c.req.header()
+    for (const [key, value] of Object.entries(headers)) {
+      // Skip hop-by-hop headers
+      if (!['host', 'connection', 'upgrade', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'transfer-encoding'].includes(key.toLowerCase())) {
+        requestData.headers[key] = value
+      }
+    }
+    
+    // Send request through WebSocket and wait for response
+    const response = await sendRequestToClient(tunnelId, requestData)
+    
+    if (!response) {
+      return c.html(`
+        <html>
+          <head><title>Request Timeout</title></head>
+          <body style="font-family: Arial; text-align: center; margin-top: 100px;">
+            <h1>⏰ Request Timeout</h1>
+            <p>The local server did not respond within 30 seconds.</p>
+            <p>Please check if your local app is running on port ${tunnel.localPort}</p>
+            <a href="javascript:history.back()" style="color: #007bff;">← Go Back</a>
+          </body>
+        </html>
+      `, 504)
+    }
+    
+    // Update tunnel stats
+    tunnel.requestCount++
+    tunnel.lastActivity = new Date()
+    
+    console.log(`📨 ${c.req.method} ${fullPath} -> ${response.status}`)
+    
+    // Create proper response
+    const responseHeaders = response.headers || {}
+    
+    // Set response headers
+    Object.entries(responseHeaders).forEach(([key, value]) => {
+      if (typeof value === 'string') {
+        c.header(key, value)
+      }
+    })
+    
+    // Return response with proper status and body
+    return new Response(response.body || '', {
+      status: response.status || 200,
+      headers: responseHeaders
+    })
+    
+  } catch (error) {
+    console.error('Proxy error:', error)
+    return c.html(`
+      <html>
+        <head><title>Proxy Error</title></head>
+        <body style="font-family: Arial; text-align: center; margin-top: 100px;">
+          <h1>❌ Proxy Error</h1>
+          <p>Failed to proxy request to local server</p>
+          <p>Error: ${error.message}</p>
+          <a href="javascript:history.back()" style="color: #007bff;">← Go Back</a>
+        </body>
+      </html>
+    `, 500)
+  }
 })
 
-// ✅ TEST ENDPOINT
-app.get('/api/test', (c) => {
-  return c.json({
-    message: 'API is working',
-    timestamp: new Date().toISOString(),
-    endpoints: [
-      'POST /api/tunnel/create',
-      'GET /api/tunnels', 
-      'GET /api/tunnel/:id',
-      'DELETE /api/tunnel/:id'
-    ]
+// Function to send request to client and wait for response
+async function sendRequestToClient(tunnelId, requestData) {
+  const connection = connections.get(tunnelId)
+  if (!connection || connection.readyState !== 1) { // 1 = OPEN
+    return null
+  }
+  
+  return new Promise((resolve, reject) => {
+    const requestKey = `${tunnelId}-${requestData.id}`
+    
+    // Set timeout for request
+    const timeout = setTimeout(() => {
+      pendingRequests.delete(requestKey)
+      resolve(null) // Return null instead of rejecting for timeout
+    }, 30000) // 30 second timeout
+    
+    // Store pending request
+    pendingRequests.set(requestKey, {
+      resolve,
+      reject,
+      timeout
+    })
+    
+    // Send request to local client
+    const message = JSON.stringify({
+      type: 'http_request',
+      ...requestData
+    })
+    
+    try {
+      connection.send(message)
+    } catch (error) {
+      clearTimeout(timeout)
+      pendingRequests.delete(requestKey)
+      resolve(null)
+    }
   })
-})
+}
+
+// Handle WebSocket response
+function handleResponse(tunnelId, response) {
+  const requestKey = `${tunnelId}-${response.requestId}`
+  const pending = pendingRequests.get(requestKey)
+  
+  if (pending) {
+    clearTimeout(pending.timeout)
+    pending.resolve(response)
+    pendingRequests.delete(requestKey)
+  }
+}
 
 // 404 handler
 app.notFound((c) => {
   return c.json({ 
     error: 'Not found',
     path: c.req.url,
-    method: c.req.method,
-    available_endpoints: [
-      'GET /',
-      'GET /health',
-      'POST /api/tunnel/create',
-      'GET /api/tunnels',
-      'GET /api/test'
-    ]
+    method: c.req.method
   }, 404)
 })
 
@@ -265,22 +380,122 @@ app.onError((err, c) => {
   return c.json({ error: 'Internal server error' }, 500)
 })
 
+// WebSocket setup
+function setupWebSocket(wss) {
+  wss.on('connection', (ws, req) => {
+    const url = new URL(req.url || '', `http://${req.headers.host}`)
+    const pathParts = url.pathname.split('/')
+    
+    // Expected path: /ws/{tunnelId}
+    if (pathParts.length !== 3 || pathParts[1] !== 'ws') {
+      ws.close(1002, 'Invalid WebSocket path')
+      return
+    }
+    
+    const tunnelId = pathParts[2]
+    
+    // Verify tunnel exists
+    const tunnel = tunnels.get(tunnelId)
+    if (!tunnel) {
+      ws.close(1002, 'Tunnel not found')
+      return
+    }
+    
+    // Close existing connection if any
+    const existingConnection = connections.get(tunnelId)
+    if (existingConnection) {
+      existingConnection.close()
+    }
+    
+    // Store new connection
+    connections.set(tunnelId, ws)
+    tunnel.connected = true
+    tunnel.lastActivity = new Date()
+    
+    console.log(`🔌 WebSocket connected for tunnel: ${tunnelId}`)
+    
+    // Send welcome message
+    ws.send(JSON.stringify({
+      type: 'connected',
+      tunnelId,
+      message: 'Successfully connected to tunnel'
+    }))
+    
+    // Handle incoming messages
+    ws.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString())
+        
+        if (message.type === 'http_response') {
+          handleResponse(tunnelId, {
+            requestId: message.requestId,
+            status: message.status,
+            headers: message.headers,
+            body: message.body
+          })
+        } else if (message.type === 'ping') {
+          tunnel.lastActivity = new Date()
+          ws.send(JSON.stringify({
+            type: 'pong',
+            timestamp: Date.now()
+          }))
+        }
+      } catch (error) {
+        console.error('WebSocket message parse error:', error)
+      }
+    })
+    
+    // Handle connection close
+    ws.on('close', (code, reason) => {
+      console.log(`🔌 WebSocket disconnected for tunnel: ${tunnelId} (${code}: ${reason})`)
+      tunnel.connected = false
+      connections.delete(tunnelId)
+    })
+    
+    // Handle connection error
+    ws.on('error', (error) => {
+      console.error(`WebSocket error for tunnel ${tunnelId}:`, error)
+      tunnel.connected = false
+      connections.delete(tunnelId)
+    })
+    
+    // Send ping every 30 seconds to keep connection alive
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === 1) { // OPEN
+        ws.ping()
+      } else {
+        clearInterval(pingInterval)
+      }
+    }, 30000)
+    
+    ws.on('close', () => {
+      clearInterval(pingInterval)
+    })
+  })
+  
+  console.log('🌐 WebSocket server initialized')
+}
+
 // Start server
 const port = parseInt(process.env.PORT || '3000')
 const host = '0.0.0.0'
 
-console.log('🚀 Starting Hono Tunnelmole server...')
-console.log(`📡 Port: ${port}`)
-console.log(`🖥️ Host: ${host}`)
+// Create HTTP server for WebSocket upgrade
+const server = createServer()
 
-serve({
-  fetch: app.fetch,
-  port: port,
-  hostname: host
-}, (info) => {
-  console.log(`✅ Server running at http://${info.address}:${info.port}`)
-  console.log(`🏥 Health check: http://${info.address}:${info.port}/health`)
-  console.log(`📊 Dashboard: http://${info.address}:${info.port}`)
+// Setup WebSocket server
+const wss = new WebSocketServer({ server })
+setupWebSocket(wss)
+
+// Handle HTTP requests with Hono
+server.on('request', (req, res) => {
+  serve(app)(req, res)
+})
+
+server.listen(port, host, () => {
+  console.log(`✅ Hono Tunnelmole Pro server running on ${host}:${port}`)
+  console.log(`📊 Dashboard: http://${host}:${port}`)
+  console.log(`🚇 Real HTTP proxying enabled`)
 })
 
 export default app

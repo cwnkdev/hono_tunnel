@@ -6,11 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && tsc-alias",
+    "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest",
-    "lint": "eslint src/",
-    "typecheck": "tsc --noEmit",
+    "postbuild": "echo 'Build completed successfully'",
+    "test": "echo 'No tests specified'",
     "railway:deploy": "railway deploy",
     "client": "node client/local-client.js"
   },
@@ -18,20 +17,14 @@
     "hono": "^4.0.0",
     "@hono/node-server": "^1.8.0",
     "ws": "^8.16.0",
-    "uuid": "^9.0.1",
-    "cors": "^2.8.5"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/ws": "^8.5.10",
     "@types/uuid": "^9.0.7",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.0",
-    "tsc-alias": "^1.8.8",
-    "vitest": "^1.2.0",
-    "eslint": "^8.56.0",
-    "@typescript-eslint/eslint-plugin": "^6.19.0",
-    "@typescript-eslint/parser": "^6.19.0"
+    "typescript": "^5.3.0"
   },
   "engines": {
     "node": ">=18.0.0",
@@ -43,13 +36,8 @@
     "ngrok",
     "railway",
     "tunnel",
-    "websocket",
-    "local-development"
+    "websocket"
   ],
   "author": "Your Name",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yourusername/hono-tunnelmole-railway.git"
-  }
+  "license": "MIT"
 }

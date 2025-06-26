@@ -104,6 +104,10 @@ export class TunnelManager {
     return true
   }
 
+  getConnection(tunnelId: string): WebSocket | undefined {
+    return this.connections.get(tunnelId)
+  }
+
   disconnectWebSocket(tunnelId: string): void {
     const tunnel = this.tunnels.get(tunnelId)
     if (tunnel) {

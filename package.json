@@ -1,25 +1,22 @@
 {
   "name": "hono-tunnelmole-railway",
   "version": "1.0.0",
-  "description": "Tunnelmole service built with Hono for Railway deployment",
+  "description": "Simple tunnelmole service for Railway",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/index.js",
-    "build": "echo 'No build needed'",
-    "test": "echo 'No tests'"
+    "build": "echo 'No build needed'"
   },
   "dependencies": {
     "hono": "^4.0.0",
-    "@hono/node-server": "^1.8.0",
-    "ws": "^8.16.0",
-    "uuid": "^9.0.1"
+    "@hono/node-server": "^1.8.0"
   },
   "engines": {
     "node": ">=18.0.0"
   },
-  "keywords": ["hono", "tunnelmole", "railway"],
+  "keywords": ["hono", "tunnel", "railway"],
   "author": "Your Name",
   "license": "MIT"
 }
